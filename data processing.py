@@ -1,2 +1,3 @@
 
-calss imagereshape.
+class imagereshape:
+   func 
