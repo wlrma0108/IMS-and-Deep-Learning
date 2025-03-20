@@ -1,3 +1,7 @@
+import numpy as np 
+import pandas as pd 
+import matplotlib.pyplot as plt
+
 def visualize(image_batch, mask_batch=None, pred_batch=None, num_samples=8, hot_encode=True):
     num_classes = mask_batch.shape[-1] if mask_batch is not None else 0
     fix, ax = plt.subplots(num_classes + 1, num_samples, figsize=(num_samples * 2, (num_classes + 1) * 2))
