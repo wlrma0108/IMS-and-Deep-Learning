@@ -11,22 +11,7 @@ images_medseg = np.load(os.path.join(prefix, 'images_medseg.npy')).astype(np.flo
 masks_medseg = np.load(os.path.join(prefix, 'masks_medseg.npy')).astype(np.int8)
 test_images_medseg = np.load(os.path.join(prefix, 'test_images_medseg.npy')).astype(np.float32)
 
-
 ## visualize(images_radiopedia[30:], masks_radiopedia[30:])
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 def visualize(image_batch, mask_batch=None, pred_batch=None, num_samples=8, hot_encode=True):
