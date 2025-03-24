@@ -1,17 +1,18 @@
 import tensorflow
 import albumentations
 import cv2
+# 왜 안깔려있지????
 import data_processing
 import segmentation_models_pytorch as smp
 import torch.nn.functional as F
 import torch.nn as nn
-from tqdm.notebook import tqdm
-from PIL import Image
 import time
-
+import torch
+import numpy as np
 from torchvision import transforms as T
 from torch.utils.data import Dataset, DataLoader  
-import torch
+from tqdm.notebook import tqdm
+from PIL import Image
 
 SOURCE_SIZE = 512
 TARGET_SIZE = 256
@@ -82,7 +83,18 @@ class Dataset:
         
         return img_patches, mask_patches
     
-                
+
+
+val_indexes, train_indexes = list(range(24)), list(range(24, 100))
+
+train_images = np.concatenate((data_processing.images_medseg[train_indexes], data_processing.images_radiopedia))
+train_masks = np.concatenate((data_processing.masks_medseg_recover[train_indexes], data_processing.masks_radiopedia_recover))
+val_images = data_processing.images_medseg[val_indexes]
+val_masks = data_processing.masks_medseg_recover[val_indexes]
+
+batch_size = len(val_masks)
+
+
 train_dataset = Dataset(train_images, train_masks, train_augs)
 val_dataset = Dataset(val_images, val_masks, val_augs)       
 
