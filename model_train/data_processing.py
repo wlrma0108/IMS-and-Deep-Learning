@@ -40,8 +40,7 @@ def visualize(image_batch, mask_batch=None, pred_batch=None, num_samples=8, hot_
                 ax[j + 1, i].set_yticks([]) 
 
     plt.tight_layout()
-    plt.show()
-
+    plt.show()   
 
 #이미지 배열 전처리 함수
 #지나치게 높은 값 혹은 지나치게 낮은 값을 노말리제이션합니다.
