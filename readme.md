@@ -23,4 +23,3 @@ sklearn을 사용하여 모델을 배포하는 자료가 생각보다 많다. �
 
 사용스택
 pytorch, django , nginx, docker, aws or azure
-mm
