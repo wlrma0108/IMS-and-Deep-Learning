@@ -15,19 +15,18 @@ import torchvision.transforms.functional as TF
 
 import segmentation_models_pytorch as smp
 from tqdm import tqdm
-
 # --------------------------------------------------------------------------------
 # 1) .npy 파일 로드 & 전처리
 # --------------------------------------------------------------------------------
 prefix = "./dataset"  # 실제 경로에 맞춰 수정
 
-# (1) 라디오피디아 & MedSeg에서 제공된 .npy 로드
-# float32(이미지), int8(마스크)로 명시적 변환
+# (1) 라디오피디아 & MedSeg .npy 로드
 images_radiopedia = np.load(os.path.join(prefix, 'images_radiopedia.npy')).astype(np.float32)
 masks_radiopedia  = np.load(os.path.join(prefix, 'masks_radiopedia.npy')).astype(np.int8)
 images_medseg     = np.load(os.path.join(prefix, 'images_medseg.npy')).astype(np.float32)
 masks_medseg      = np.load(os.path.join(prefix, 'masks_medseg.npy')).astype(np.int8)
 
+print(smp.encoders.get_encoder_names())
 print("radiopedia images:", images_radiopedia.shape, 
       "radiopedia masks:",  masks_radiopedia.shape)
 print("medseg images:", images_medseg.shape, 
@@ -41,17 +40,15 @@ def onehot_to_mask(mask_1hot):
 masks_radiopedia_recover = onehot_to_mask(masks_radiopedia)
 masks_medseg_recover     = onehot_to_mask(masks_medseg)
 
-# (3) HU값 클리핑 & z-score 정규화
+# (3) CT HU값 클리핑 & z-score 정규화
 def preprocess_images(images, mean_std=None):
     """
-    CT 이미지 전처리:
     1) HU를 [-1500, 500] 범위로 클리핑
-    2) 5~95 분위수 구간 사용해 mean/std 계산
-    3) z-score 정규화
+    2) 5~95 분위수 구간으로 평균/표준편차 산출
+    3) (x - mean)/std
     """
     images[images > 500]   = 500
     images[images < -1500] = -1500
-
     p5, p95   = np.percentile(images, [5,95])
     valid_vals= images[(images > p5) & (images < p95)]
     if mean_std is None:
@@ -63,16 +60,15 @@ def preprocess_images(images, mean_std=None):
     images = (images - mean)/std
     return images, (mean, std)
 
-# 라디오피디아: mean_std 없음 -> 계산
+# 라디오피디아 -> mean_std 계산
 images_radiopedia, mean_std = preprocess_images(images_radiopedia, None)
-# MedSeg: 같은 mean_std로 정규화
+# MedSeg -> 동일 (mean, std)로 정규화
 images_medseg,   _         = preprocess_images(images_medseg, mean_std)
 
 # (4) 학습/검증 분할
-val_indexes   = list(range(24))                     
-train_indexes = list(range(24, len(images_medseg))) 
+val_indexes   = list(range(24))                           
+train_indexes = list(range(24, len(images_medseg)))       
 
-# 라디오피디아 -> 전부 train
 train_images = np.concatenate([images_medseg[train_indexes], images_radiopedia], axis=0)
 train_masks  = np.concatenate([masks_medseg_recover[train_indexes], masks_radiopedia_recover], axis=0)
 
@@ -93,7 +89,7 @@ del masks_radiopedia_recover, masks_medseg_recover
 class RandomRotationCropFlip:
     """
     - ±180도 범위 내 Random Rotation
-    - (224 x 224) Random Crop (ViT는 224 해상도 권장)
+    - (224 x 224) Random Crop
     - 0.5 확률로 좌우 뒤집기
     """
     def __init__(self, output_size=224, rotation_degree=180, p_flip=0.5):
@@ -107,7 +103,7 @@ class RandomRotationCropFlip:
         img   = TF.rotate(img, angle=angle, fill=0)
         mask  = TF.rotate(mask, angle=angle, fill=0)
 
-        # (2) 랜덤 크롭 or 중앙 크롭 (224×224)
+        # (2) 랜덤 크롭 or 중앙 크롭 (224x224)
         w, h   = img.size
         crop_h = crop_w = self.output_size
         if (w > crop_w) and (h > crop_h):
@@ -116,7 +112,7 @@ class RandomRotationCropFlip:
             img  = TF.crop(img, top, left, crop_h, crop_w)
             mask = TF.crop(mask, top, left, crop_h, crop_w)
         else:
-            # 작으면 중앙에서
+            # 작으면 중앙 크롭
             left = max(0, (w - crop_w)//2)
             top  = max(0, (h - crop_h)//2)
             cw   = min(w, crop_w)
@@ -131,9 +127,8 @@ class RandomRotationCropFlip:
 
         return img, mask
 
-
 class SimpleResize:
-    """검증용: 224×224 Resize"""
+    """검증용: 224×224 리사이즈"""
     def __init__(self, out_size=224):
         self.out_size = out_size
     def __call__(self, img, mask):
@@ -141,7 +136,6 @@ class SimpleResize:
         mask = TF.resize(mask, (self.out_size, self.out_size), interpolation=Image.NEAREST)
         return img, mask
 
-# 학습/검증용 transform 할당
 train_transform = RandomRotationCropFlip(output_size=224)
 val_transform   = SimpleResize(out_size=224)
 
@@ -152,20 +146,20 @@ class MySegDataset(Dataset):
     """
     - images: (N,H,W) float
     - masks:  (N,H,W) int
-    - transform: torchvision F 사용
+    - transform: (pil_img, pil_mask)->(pil_img, pil_mask)
     """
     def __init__(self, images, masks, transform=None):
         self.images    = images
         self.masks     = masks
         self.transform = transform
-        self.mean = [0.485, 0.456, 0.406]  # ImageNet mean
-        self.std  = [0.229, 0.224, 0.225]  # ImageNet std
+        # ImageNet 통계 (RGB 3채널)
+        self.mean = [0.485, 0.456, 0.406]
+        self.std  = [0.229, 0.224, 0.225]
 
     def __len__(self):
         return len(self.images)
 
     def __getitem__(self, idx):
-        # (1) NumPy -> float array
         image = self.images[idx]
         mask  = self.masks[idx]
 
@@ -173,7 +167,7 @@ class MySegDataset(Dataset):
         if image.ndim == 3 and image.shape[-1] == 1:
             image = image.squeeze(-1)
 
-        # 단일채널 -> 3채널 RGB
+        # 흑백 -> RGB 3채널
         if image.ndim == 2:
             image = np.stack([image]*3, axis=-1)
 
@@ -181,15 +175,15 @@ class MySegDataset(Dataset):
         image = (image * 255).clip(0,255).astype(np.uint8)
         mask  = mask.astype(np.int32)
 
-        # (2) PIL 변환
+        # PIL 변환
         pil_img  = Image.fromarray(image, mode='RGB')
         pil_mask = Image.fromarray(mask,  mode='I')
 
-        # (3) transform(회전,크롭 등)
+        # transform
         if self.transform:
             pil_img, pil_mask = self.transform(pil_img, pil_mask)
 
-        # (4) ToTensor + Normalize
+        # ToTensor & Normalize
         t_img = T.ToTensor()(pil_img)  # (3,H,W)
         t_img = T.Normalize(self.mean, self.std)(t_img)
         t_mask= torch.from_numpy(np.array(pil_mask)).long()
@@ -204,40 +198,59 @@ train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True
 val_dataloader   = DataLoader(val_dataset,   batch_size=batch_size, shuffle=False)
 
 # --------------------------------------------------------------------------------
-# 4) 시각화 함수
+# 4) 시각화 함수 (개선)
 # --------------------------------------------------------------------------------
 def visualize_samples(dataloader, n=2):
+    """
+    한 번의 배치에서 n개 샘플을 시각화.
+    - 이미지는 (3,H,W)->(H,W,3)로 변형
+    - 마스크는 cmap='jet' + colorbar 추가
+    """
     data_iter = iter(dataloader)
     imgs, msks = next(data_iter)
 
-    print("Sample batch - imgs:", imgs.shape, imgs.dtype)
-    print("Sample batch - msks:", msks.shape, msks.dtype)
+    print("[Visualization] Batch Shape - imgs:", imgs.shape, imgs.dtype)
+    print("[Visualization] Batch Shape - msks:", msks.shape, msks.dtype)
 
     for i in range(min(n, len(imgs))):
-        # (3,H,W) -> (H,W,3)
+        # Tensor -> NumPy, (C,H,W)->(H,W,C)
         img_np  = imgs[i].cpu().numpy().transpose(1,2,0)
         mask_np = msks[i].cpu().numpy()
 
-        fig, ax = plt.subplots(1,2, figsize=(8,4))
-        ax[0].imshow(img_np.astype(np.float32))
-        ax[1].imshow(mask_np, cmap='jet')
-        ax[0].set_title("Image (RGB)")
-        ax[1].set_title("Mask")
+        # 시각적 용도로 float32 -> float64 변환(precision)
+        img_np  = img_np.astype(np.float64)
+
+        # 준비
+        fig, ax = plt.subplots(1,2, figsize=(10,5))
+
+        # 첫 번째 subplot - 원본 이미지
+        ax[0].imshow(img_np)
+        ax[0].set_title(f"Image {i} (RGB)")
+        ax[0].axis('off')
+
+        # 두 번째 subplot - 마스크
+        mappable = ax[1].imshow(mask_np, cmap='jet')
+        ax[1].set_title(f"Mask {i}")
+        ax[1].axis('off')
+
+        # colorbar
+        fig.colorbar(mappable, ax=ax[1], fraction=0.046, pad=0.04)
+
+        plt.tight_layout()
         plt.show()
 
 visualize_samples(train_dataloader, n=2)
 
 # --------------------------------------------------------------------------------
-# 5) 모델(ViT 인코더) & 학습
+# 5) 모델(ViT) & 학습
 # --------------------------------------------------------------------------------
-model = smp.Unet(
-    encoder_name='tu-vit_base_patch16_224',  # ViT 인코더 (224 해상도)
-    encoder_weights='imagenet21k_in1k',     # timm 사전학습
+# 예시: DeepLabV3Plus + ViT 인코더
+model = smp.Segformer(
+    encoder_name="mit_b5",         # MiT-B5 encoder (ViT 기반 계층형 백본)
+    encoder_weights=None,    # 제공된 사전학습 가중치
     in_channels=3,
-    classes=4,
-    activation=None,
+    classes=4
 )
-
 def pixel_accuracy(output, mask):
     with torch.no_grad():
         pred = torch.argmax(F.softmax(output, dim=1), dim=1)
@@ -319,6 +332,7 @@ def fit(epochs, model, train_loader, val_loader, criterion, optimizer, scheduler
               f" Train Loss={train_loss:.3f}, Acc={train_acc:.3f}, mIoU={train_iou:.3f} | "
               f"Val Loss={val_loss:.3f}, Acc={val_acc:.3f}, mIoU={val_iou:.3f}, LR={lr:.6f}")
 
+        # Early Stopping
         if val_loss < min_val_loss:
             print(f"Val Loss improved {min_val_loss:.3f} -> {val_loss:.3f}. Saving model...")
             min_val_loss = val_loss
@@ -344,7 +358,6 @@ weight_decay=1e-4
 criterion = nn.CrossEntropyLoss()
 optimizer = torch.optim.AdamW(model.parameters(), lr=max_lr, weight_decay=weight_decay)
 
-# OneCycleLR: (epochs) * (step_per_epoch)
 scheduler = torch.optim.lr_scheduler.OneCycleLR(
     optimizer, max_lr, epochs=epochs, steps_per_epoch=len(train_dataloader)
 )
