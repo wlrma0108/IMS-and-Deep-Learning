@@ -8,15 +8,12 @@ from torchvision import datasets, transforms, models
 from sklearn.metrics import classification_report, confusion_matrix
 
 # ----------------------------------------------------------------------------------
-# (선택) 세그멘테이션용 .npy 파일 로드 (현재 분류 코드에서는 사용 안 함)
-# ----------------------------------------------------------------------------------
 DATASET_DIR = "./dataset"  # .npy 파일들이 들어있는 폴더
 images_radiopedia = np.load(os.path.join(DATASET_DIR, "images_radiopedia.npy"))
 masks_radiopedia  = np.load(os.path.join(DATASET_DIR, "masks_radiopedia.npy"))
 images_medseg     = np.load(os.path.join(DATASET_DIR, "images_medseg.npy"))
 masks_medseg      = np.load(os.path.join(DATASET_DIR, "masks_medseg.npy"))
 test_images_medseg= np.load(os.path.join(DATASET_DIR, "test_images_medseg.npy"))
-# 위 배열들은 세그멘테이션 등에 활용 가능 (현재 예제는 분류 모델이므로 미사용)
 
 # ----------------------------------------------------------------------------------
 # 분류용 설정
@@ -29,7 +26,6 @@ NUM_CLASSES  = 4  # 분류할 클래스 수
 device       = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-# ----------------------------------------------------------------------------------
 # 1. 데이터 전처리 & Dataloader 구성
 # ----------------------------------------------------------------------------------
 def prepare_dataloaders(dataset_root, batch_size=16, split_ratio=0.8):

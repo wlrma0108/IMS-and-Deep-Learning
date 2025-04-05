@@ -173,7 +173,7 @@ class MySegDataset(Dataset):
 
         # float -> [0,255] uint8
         image = (image * 255).clip(0,255).astype(np.uint8)
-        mask  = mask.astype(np.int32)
+        mask  = mask.astype(np.bmgjint32)
 
         # PIL 변환
         pil_img  = Image.fromarray(image, mode='RGB')
