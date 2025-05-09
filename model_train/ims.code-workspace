@@ -1,0 +1,13 @@
+{
+	"folders": [
+		{
+			"name": "ims",
+			"path": ".."
+		},
+		{
+			"name": "covid-segmentation",
+			"path": "../../../Downloads/covid-segmentation"
+		}
+	],
+	"settings": {}
+}
