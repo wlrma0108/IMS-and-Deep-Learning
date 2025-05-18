@@ -1,4 +1,19 @@
 dataset/
 dataset
 .npy
-
+unet_covid_segmentation.pt
+.pt
+COVID-19 Dataset/
+COVID-19 Dataset
+dataset2
+dataset2/
+dataset2_JPEG
+dataset2_JPEG/
+dataset2_elastic
+dataset2_elastic/
+dataset2_FlipRotate
+dataset2_FlipRotate/
+dataset2_mixup/
+dataset2_mixup
+dataset2_aug
+dataset2_aug/
