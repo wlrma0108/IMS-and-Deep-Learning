@@ -19,7 +19,7 @@ from tqdm import tqdm
 # --------------------------------------------------------------------------------
 # 1) .npy 파일 로드 & 전처리
 # --------------------------------------------------------------------------------
-prefix = "C:\\Users\\admin\\dataset"
+prefix = r"C:\\Users\\hojoo\\Downloads\\covid-segmentation"  
 
 images_radiopedia = np.load(os.path.join(prefix, 'images_radiopedia.npy')).astype(np.float32)
 masks_radiopedia  = np.load(os.path.join(prefix, 'masks_radiopedia.npy')).astype(np.int8)
@@ -31,294 +31,172 @@ print("radiopedia images:", images_radiopedia.shape,
 print("medseg images:", images_medseg.shape, 
       "medseg masks:",  masks_medseg.shape)
 
-def onehot_to_mask(mask_1hot):
-    """(H, W, K) one-hot → (H, W) integer index"""
-    return np.argmax(mask_1hot, axis=-1)
+# convert one-hot to mask indices
+masks_radiopedia_recover = np.argmax(masks_radiopedia, axis=-1)
+masks_medseg_recover     = np.argmax(masks_medseg, axis=-1)
 
-masks_radiopedia_recover = onehot_to_mask(masks_radiopedia)
-masks_medseg_recover     = onehot_to_mask(masks_medseg)
-
-# CT HU값 클리핑 & z-score 정규화
+# CT HU clipping & z-score normalization
 def preprocess_images(images, mean_std=None):
-    images[images > 500]   = 500
-    images[images < -1500] = -1500
+    images = np.clip(images, -1500, 500)
     p5, p95 = np.percentile(images, [5,95])
-    valid_vals = images[(images > p5) & (images < p95)]
+    valid = images[(images>=p5)&(images<=p95)]
     if mean_std is None:
-        mean = valid_vals.mean()
-        std  = valid_vals.std()
+        mean, std = valid.mean(), valid.std()
     else:
         mean, std = mean_std
-    images = (images - mean)/std
-    return images, (mean, std)
+    return (images-mean)/std, (mean, std)
 
-images_radiopedia, mean_std = preprocess_images(images_radiopedia, None)
+images_radiopedia, mean_std = preprocess_images(images_radiopedia)
 images_medseg, _ = preprocess_images(images_medseg, mean_std)
 
-# Train/Val 분할
-val_indexes = list(range(24))
-train_indexes = list(range(24, len(images_medseg)))
+# Train/Val split
+val_idx   = list(range(24))
+train_idx = list(range(24, len(images_medseg)))
 
-train_images = np.concatenate([images_medseg[train_indexes], images_radiopedia], axis=0)
-train_masks  = np.concatenate([masks_medseg_recover[train_indexes], masks_radiopedia_recover], axis=0)
+train_images = np.concatenate([images_medseg[train_idx], images_radiopedia],axis=0)
+train_masks  = np.concatenate([masks_medseg_recover[train_idx], masks_radiopedia_recover],axis=0)
+val_images   = images_medseg[val_idx]
+val_masks    = masks_medseg_recover[val_idx]
 
-val_images = images_medseg[val_indexes]
-val_masks  = masks_medseg_recover[val_indexes]
+print(f"[Train] images: {train_images.shape}, masks: {train_masks.shape}")
+print(f"[Val]   images: {val_images.shape}, masks: {val_masks.shape}")
 
-print("[Train] images:", train_images.shape, "masks:", train_masks.shape)
-print("[Val  ] images:", val_images.shape,   "masks:", val_masks.shape)
+del images_radiopedia, masks_radiopedia, images_medseg, masks_medseg
 
-# 메모리 회수
-del images_radiopedia, masks_radiopedia
-del images_medseg, masks_medseg, masks_radiopedia_recover, masks_medseg_recover
+def one_cycle_transform(img, mask, size=384):
+    # strong augment
+    angle = random.uniform(-30,30)
+    img, mask = TF.rotate(img,angle), TF.rotate(mask,angle)
+    if random.random()<0.5:
+        img = TF.adjust_brightness(img, random.uniform(0.7,1.3))
+        img = TF.adjust_contrast(img, random.uniform(0.7,1.3))
+    if random.random()<0.5:
+        img, mask = TF.hflip(img), TF.hflip(mask)
+    img = TF.center_crop(img,size)
+    mask = TF.center_crop(mask,size)
+    return img, mask
 
-# --------------------------------------------------------------------------------
-# 2) 커스텀 증강 (torchvision.transforms.functional)
-# --------------------------------------------------------------------------------
-
-'''
-
-회전 : 위치/방향 변화에 대한 불변성 학습
-밝기/대비 조절 : 조명 조건 변화에 강한 모델 학습
-좌우 반전 : 구조적 다양성 증가
-중앙 크롭 :크기 표준화 + 주변 여백 제거
-
-'''
-class StrongAugment:
-    def __init__(self, output_size=384):
-        self.output_size = output_size
-
-    def __call__(self, img, mask):
-        # 기본 회전 : -30도 ~ +30도 사이의 임의 각도로 회전시킵니다.
-        angle = random.uniform(-30, 30)
-        img = TF.rotate(img, angle)
-        mask = TF.rotate(mask, angle)
-
-        # 밝기 & 대비 조정 (이미지에만) : 50% 확률로 실행됩니다. 밝기는 70%~130% 범위 내에서 조정됩니다. *마스크에는 적용 하지 않음
-        if random.random() < 0.5:
-            img = TF.adjust_brightness(img, random.uniform(0.7, 1.3))
-            img = TF.adjust_contrast(img, random.uniform(0.7, 1.3))
-
-        # 좌우 뒤집기 : 이미지와 마스크를 50% 확률로 좌우 반전합니다.
-        if random.random() < 0.5:
-            img = TF.hflip(img)
-            mask = TF.hflip(mask)
-
-        # 중앙 크롭 : 사이즈 통일 및 배치 처리의 안정성 확보를 위해 회전, 밝기 조정 후 생긴 여백이나 잘림 방지를 위해 중앙을 기준으로 256x256으로 잘라냅니다.
-        img = TF.center_crop(img, self.output_size)
-        mask = TF.center_crop(mask, self.output_size)
-
-        return img, mask
-
-class SimpleResize:
-    """검증용: 380×380 Resize"""
-    def __init__(self, out_size=384):
-        self.out_size = out_size
-    def __call__(self, img, mask):
-        img  = TF.resize(img,  (self.out_size, self.out_size), interpolation=Image.NEAREST)
-        mask = TF.resize(mask, (self.out_size, self.out_size), interpolation=Image.NEAREST)
-        return img, mask
-
-train_transform = StrongAugment(output_size=384)
-val_transform   = SimpleResize(out_size=384)
-
-# --------------------------------------------------------------------------------
-# 3) Dataset & DataLoader
-# --------------------------------------------------------------------------------
-"""
-    - images: (N,H,W) or (N,H,W,1)
-    - masks:  (N,H,W)
-    - transform: (pil_img, pil_mask)->(pil_img, pil_mask)
-"""
-class MySegDataset(Dataset):
+class SegDataset(Dataset):
     def __init__(self, images, masks, transform=None):
-        self.images    = images
-        self.masks     = masks
+        self.images, self.masks = images, masks
         self.transform = transform
-        self.mean = [0.485, 0.456, 0.406]
-        self.std  = [0.229, 0.224, 0.225]
+        self.mean = [0.485,0.456,0.406]
+        self.std  = [0.229,0.224,0.225]
+    def __len__(self): return len(self.images)
+    
+    def __getitem__(self,idx):
+        img, mask = self.images[idx], self.masks[idx]
 
-    def __len__(self):
-        return len(self.images)
+        # 흑백(2D) 이미지를 RGB 3채널로 변환
+        if img.ndim == 2:
+            img = np.stack([img] * 3, axis=-1)
+        img = (img * 255).clip(0, 255).astype(np.uint8)
+        pil_img = Image.fromarray(img, mode='RGB')
 
-    def __getitem__(self, idx):
-        image = self.images[idx] # (H,W) or (H,W,1)
-        mask  = self.masks[idx] # (H,W)
+        # 마스크는 단일 채널 uint8로 변환하여 PIL Image로 생성
+        mask_uint8 = mask.astype(np.uint8)
+        pil_mask   = Image.fromarray(mask_uint8, mode='L')
 
-        # (H,W,1) -> (H,W)
-        if image.ndim == 3 and image.shape[-1] == 1:
-            image = image.squeeze(-1)
-
-        # 흑백 -> RGB 3채널
-        if image.ndim == 2:
-            image = np.stack([image]*3, axis=-1)
-
-        # float -> 0~255 uint8
-        # (이미 -2~+2 등 범위일 수 있으므로 clip)
-        image = (image * 255).clip(0,255).astype(np.uint8)
-        mask  = mask.astype(np.int32)
-
-        # NumPy -> PIL
-        pil_img  = Image.fromarray(image, mode='RGB')
-        pil_mask = Image.fromarray(mask,  mode='I')
-
-        # transform
+        # 증강(transform) 적용
         if self.transform:
             pil_img, pil_mask = self.transform(pil_img, pil_mask)
 
-        # ToTensor & Normalize
-        t_img = T.ToTensor()(pil_img) # (3,H,W)
+        # Tensor 변환 및 정규화
+        t_img = T.ToTensor()(pil_img)
         t_img = T.Normalize(self.mean, self.std)(t_img)
 
-        t_mask= torch.from_numpy(np.array(pil_mask)).long() # (H,W)
+        # PIL 마스크를 numpy 배열로 → 2D로 보장 → LongTensor로 변환
+        mask_arr = np.array(pil_mask)
+        # 경우에 따라 (H,W,1) 형태가 되면 채널 차원을 제거
+        if mask_arr.ndim == 3:
+            mask_arr = mask_arr[..., 0]
+        t_mask = torch.from_numpy(mask_arr).long()
 
         return t_img, t_mask
-    
-# **Batch Size를 줄여서 OOM 방지**
-batch_size = 2 # (원래 len(val_images)는 너무 큼 -> GPU 메모리 초과)
-train_dataset = MySegDataset(train_images, train_masks, transform=train_transform)
-val_dataset   = MySegDataset(val_images,   val_masks,   transform=val_transform)
 
-train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-val_dataloader   = DataLoader(val_dataset,   batch_size=batch_size, shuffle=False)
+batch_size=2
+train_ds = SegDataset(train_images,train_masks,transform=one_cycle_transform)
+val_ds   = SegDataset(val_images,val_masks,transform=lambda i,m: (TF.resize(i,(384,384)),TF.resize(m,(384,384))))
+train_dl = DataLoader(train_ds,batch_size,shuffle=True)
+val_dl   = DataLoader(val_ds,batch_size,shuffle=False)
 
-# --------------------------------------------------------------------------------
-# 4) 시각화 수정
-# --------------------------------------------------------------------------------
-def visualize_samples(dataloader, n=2):
-    data_iter = iter(dataloader)
-    imgs, msks = next(data_iter)
-    print("Sample batch - imgs:", imgs.shape, imgs.dtype)  # (B,3,H,W), float
-    print("Sample batch - msks:", msks.shape, msks.dtype)  # (B,H,W), long
+# metrics: accuracy, mIoU, recall, precision, f1
 
-    for i in range(min(n, len(imgs))):
-        img_np  = imgs[i].cpu().numpy().transpose(1,2,0)
-        mask_np = msks[i].cpu().numpy()
-        fig, ax = plt.subplots(1,2, figsize=(8,4))
-        ax[0].imshow(img_np.astype(np.float32))
-        ax[1].imshow(mask_np, cmap='jet')
-        ax[0].set_title("Image (RGB)")
-        ax[1].set_title("Mask")
-        plt.show()
+def pixel_accuracy(logits,mask):
+    pred = logits.argmax(1)
+    return (pred==mask).float().mean().item()
 
-visualize_samples(train_dataloader, n=2)
+def mIoU(logits,mask,classes=4):
+    pred=logits.argmax(1).view(-1); true=mask.view(-1)
+    ious=[]
+    for c in range(classes):
+        pred_c=(pred==c); true_c=(true==c)
+        if true_c.sum()==0: continue
+        intersect=(pred_c&true_c).sum().item()
+        union=(pred_c|true_c).sum().item()
+        ious.append(intersect/union)
+    return np.mean(ious)
 
-# --------------------------------------------------------------------------------
-# 5) 세그멘테이션 모델 & 학습
-# --------------------------------------------------------------------------------
-model = smp.Unet(
-    encoder_name='efficientnet-b4',
-    in_channels=3,
-    encoder_weights='imagenet',
-    classes=4,  
-    activation=None,
-    decoder_dropout=0.2 # 정규화를 위한 수정
-)
+def precision_recall_f1(logits,mask,classes=4):
+    pred=logits.argmax(1).view(-1); true=mask.view(-1)
+    precisions, recalls = [], []
+    for c in range(classes):
+        tp = ((pred==c)&(true==c)).sum().item()
+        fp = ((pred==c)&(true!=c)).sum().item()
+        fn = ((pred!=c)&(true==c)).sum().item()
+        if tp+fp>0: precisions.append(tp/(tp+fp))
+        if tp+fn>0: recalls.append(tp/(tp+fn))
+    prec = np.mean(precisions) if precisions else 0
+    rec  = np.mean(recalls)    if recalls    else 0
+    f1   = 2*prec*rec/(prec+rec) if prec+rec>0 else 0
+    return prec, rec, f1
 
-def pixel_accuracy(output, mask):
-    with torch.no_grad():
-        pred = torch.argmax(F.softmax(output, dim=1), dim=1)
-        correct = (pred == mask).float().sum()
-        total   = mask.numel()
-        return float(correct/total)
+# model & training
+model = smp.Unet('efficientnet-b4',in_channels=3,classes=4,activation=None)
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+model.to(device)
+criterion = nn.CrossEntropyLoss()
+optimizer = torch.optim.AdamW(model.parameters(),lr=1e-3,weight_decay=1e-4)
+scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer,1e-3,epochs=10,steps_per_epoch=len(train_dl))
 
-def mIoU(logits, mask, smooth=1e-10, n_classes=4):
-    with torch.no_grad():
-        pred = torch.argmax(F.softmax(logits, dim=1), dim=1)
-        pred = pred.view(-1)
-        mask = mask.view(-1)
-        ious = []
-        for c in range(n_classes):
-            pred_c = (pred == c)
-            mask_c = (mask == c)
-            if mask_c.long().sum().item() == 0:
-                ious.append(np.nan)
-            else:
-                intersect = (pred_c & mask_c).sum().item()
-                union     = (pred_c | mask_c).sum().item()
-                iou_val   = (intersect+smooth)/(union+smooth)
-                ious.append(iou_val)
-        return np.nanmean(ious)
-
-def fit(epochs, model, train_loader, val_loader, criterion, optimizer, scheduler):
-    device = next(model.parameters()).device
-    min_val_loss = float('inf')
-    no_improve   = 0
-
+def fit(epochs):
+    best_loss=1e9
     for e in range(epochs):
         model.train()
-        train_loss=0.0
-        train_acc =0.0
-        train_iou =0.0
-        torch.cuda.empty_cache()
-
-        for imgs, msks in tqdm(train_loader, desc=f"Epoch {e+1}/{epochs} [Train]"):
-            imgs, msks = imgs.to(device), msks.to(device)
-            optimizer.zero_grad()
-            outputs = model(imgs)
-            loss    = criterion(outputs, msks)
-            loss.backward()
-            optimizer.step()
-            scheduler.step()
-            train_loss += loss.item()
-            train_acc  += pixel_accuracy(outputs, msks)
-            train_iou  += mIoU(outputs, msks, n_classes=4)
-
-        n_train = len(train_loader)
-        train_loss /= n_train
-        train_acc  /= n_train
-        train_iou  /= n_train
+        stats = {'loss':0,'acc':0,'iou':0,'prec':0,'rec':0,'f1':0}
+        for x,y in tqdm(train_dl,desc=f'Train {e+1}'):
+            x,y = x.to(device),y.to(device)
+            optimizer.zero_grad(); out=model(x)
+            loss=criterion(out,y); loss.backward(); optimizer.step(); scheduler.step()
+            stats['loss'] += loss.item()
+            stats['acc']  += pixel_accuracy(out,y)
+            stats['iou']  += mIoU(out,y)
+            p,r,f = precision_recall_f1(out,y)
+            stats['prec']+= p; stats['rec']+= r; stats['f1']+= f
+        for k in stats: stats[k]/=len(train_dl)
 
         model.eval()
-        val_loss=0.0
-        val_acc =0.0
-        val_iou =0.0
+        val_stats = {'loss':0,'acc':0,'iou':0,'prec':0,'rec':0,'f1':0}
         with torch.no_grad():
-            for imgs, msks in tqdm(val_loader, desc=f"Epoch {e+1}/{epochs} [Val]"):
-                imgs, msks = imgs.to(device), msks.to(device)
-                logits= model(imgs)
-                loss = criterion(logits, msks)
-                val_loss += loss.item()
-                val_acc  += pixel_accuracy(logits, msks)
-                val_iou  += mIoU(logits, msks, n_classes=4)
+            for x,y in tqdm(val_dl,desc=f'Val {e+1}'):
+                x,y = x.to(device),y.to(device)
+                out=model(x); loss=criterion(out,y)
+                val_stats['loss']+=loss.item()
+                val_stats['acc'] += pixel_accuracy(out,y)
+                val_stats['iou'] += mIoU(out,y)
+                p,r,f = precision_recall_f1(out,y)
+                val_stats['prec']+=p; val_stats['rec']+=r; val_stats['f1']+=f
+        for k in val_stats: val_stats[k]/=len(val_dl)
 
-        n_val   = len(val_loader)
-        val_loss/= n_val
-        val_acc /= n_val
-        val_iou /= n_val
+        print(f"Epoch {e+1}/{epochs}")
+        print(f" Train Loss={stats['loss']:.3f}, Acc={stats['acc']:.3f}, mIoU={stats['iou']:.3f}, Prec={stats['prec']:.3f}, Rec={stats['rec']:.3f}, F1={stats['f1']:.3f}")
+        print(f" Val   Loss={val_stats['loss']:.3f}, Acc={val_stats['acc']:.3f}, mIoU={val_stats['iou']:.3f}, Prec={val_stats['prec']:.3f}, Rec={val_stats['rec']:.3f}, F1={val_stats['f1']:.3f}\n")
 
-        lr = scheduler.get_last_lr()[0]
-        print(f"\n[Epoch {e+1}/{epochs}]"
-              f" Train Loss={train_loss:.3f}, Acc={train_acc:.3f}, mIoU={train_iou:.3f} | "
-              f"Val Loss={val_loss:.3f}, Acc={val_acc:.3f}, mIoU={val_iou:.3f}, LR={lr:.6f}")
-
-        if val_loss < min_val_loss:
-            print(f"Val Loss improved {min_val_loss:.3f} -> {val_loss:.3f}. Saving model...")
-            min_val_loss = val_loss
-            no_improve   = 0
-            torch.save(model.state_dict(), f"Unet_effb4_epoch{e+1}_val{val_loss:.3f}.pth")
+        if val_stats['loss']<best_loss:
+            best_loss=val_stats['loss']
+            torch.save(model.state_dict(),f"best_model_epoch{e+1}.pth")
         else:
-            no_improve+=1
-            print(f"Val Loss not improved count = {no_improve}")
-            if no_improve>=7:
-                print("No improvement for 7 epochs, stopping early.")
-                break
-# --------------------------------------------------------------------------------
-# 6) 실제 학습
-# --------------------------------------------------------------------------------
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-model.to(device)
+            pass
 
-epochs=10
-max_lr=1e-3
-weight_decay=1e-4 
+fit(10)
 
-criterion=nn.CrossEntropyLoss()
-
-# Batch Size를 줄였으므로 step_per_epoch가 많아진다
-optimizer=torch.optim.AdamW(model.parameters(), lr=max_lr, weight_decay=weight_decay)
-scheduler=torch.optim.lr_scheduler.OneCycleLR(
-    optimizer, max_lr, epochs=epochs, steps_per_epoch=len(train_dataloader)
-)
-
-fit(epochs, model, train_dataloader, val_dataloader, criterion, optimizer, scheduler)
