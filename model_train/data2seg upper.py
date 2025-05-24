@@ -9,15 +9,15 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 
-IMAGE_DIR = r'C:\Users\kim\Desktop\ims\dataset2_aug\dataset2_FlipRotate'
-MASK_DIR  = r'C:\Users\kim\Desktop\ims\dataset2_aug\dataset2_FlipRotate_masks'
-IMAGE_SIZE = 512
-NUM_SAMPLES = 40
-BATCH_SIZE = 2
-EPOCHS = 5
-LEARNING_RATE = 1e-2
+IMAGE_DIR = r'C:\Users\hojoo\Desktop\ims\dataset2_aug\dataset2_elastic'
+MASK_DIR  = r'C:\Users\hojoo\Desktop\ims\dataset2_aug\dataset2_elastic_masks'
+IMAGE_SIZE = 256
+NUM_SAMPLES = 2700
+BATCH_SIZE = 8
+EPOCHS = 100
+LEARNING_RATE = 1e-3
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-
+print(f"사용중인 장치 : {DEVICE}")
 
 # --- Dataset 클래스 ---
 class CovidDataset(Dataset):

@@ -7,18 +7,18 @@ import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 
 # ── 설정 ───────────────────────────────────────────────────────────
-IMAGE_DIR   = r'C:\Users\kim\Desktop\ims\dataset2\frames'
-MASK_DIR    = r'C:\Users\kim\Desktop\ims\dataset2\masks'
-OUTPUT_DIR  = r'C:\Users\kim\Desktop\ims\gan_output'
-IMG_SIZE    = 512
-BATCH_SIZE  = 2
-EPOCHS      = 5
+IMAGE_DIR   = r'C:\Users\hojoo\Downloads\dataset2\frames'
+MASK_DIR    = r'C:\Users\hojoo\Downloads\dataset2\masks'
+OUTPUT_DIR  = r'C:\Users\hojoo\Downloads\dataset2\gan_output1'
+IMG_SIZE    = 256
+BATCH_SIZE  = 8
+EPOCHS      = 50
 LR          = 2e-4
 L1_LAMBDA   = 100
-NUM_SAMPLES = 10
+NUM_SAMPLES = 2000
 DEVICE      = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+print(f"사용중인 장치 : {DEVICE}")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
-# ──────────────────────────────────────────────────────────────────
 
 # ── Dataset ──
 class CovidDataset(Dataset):

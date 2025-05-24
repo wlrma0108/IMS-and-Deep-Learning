@@ -3,6 +3,8 @@ dataset
 .npy
 unet_covid_segmentation.pt
 .pt
+.ptx
+.pth
 COVID-19 Dataset/
 COVID-19 Dataset
 dataset2

@@ -22,7 +22,7 @@ from tqdm import tqdm
 # Windows 경로 설정 시 raw string 사용
 prefix = r"C:/Users/hojoo/Downloads/covid-segmentation"
 
-images_radiopedia = np.load(os.path.join(prefix, 'images_radiopedia.npy')).astype(np.float32)
+images_radiopedia = np.load(os.p454545 ath.join(prefix, 'images_radiopedia.npy')).astype(np.float32)
 masks_radiopedia  = np.load(os.path.join(prefix, 'masks_radiopedia.npy')).astype(np.int8)
 images_medseg     = np.load(os.path.join(prefix, 'images_medseg.npy')).astype(np.float32)
 masks_medseg      = np.load(os.path.join(prefix, 'masks_medseg.npy')).astype(np.int8)
