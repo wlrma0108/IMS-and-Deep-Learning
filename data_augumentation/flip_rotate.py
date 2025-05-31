@@ -3,8 +3,8 @@ import random
 from glob import glob
 import cv2
 
-input_dir  = r'C:/Users/hojoo/Downloads/dataset2/masks'
-output_dir = r'dataset2_FlipRotate_masks'
+input_dir  = r'C:/Users/hojoo/Downloads/dataset2/frames'
+output_dir = r'dataset2_FlipRotate'
 os.makedirs(output_dir, exist_ok=True)
 
 # 회전 코드(OpenCV가 지원하는 90° 단위 회전)

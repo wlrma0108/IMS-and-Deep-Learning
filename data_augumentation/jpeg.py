@@ -2,11 +2,11 @@ import os
 from glob import glob
 import cv2
 
-input_dir  = r'C:/Users/hojoo/Downloads/dataset2/masks'
-output_dir = r'dataset2_JPEG_masks'
+input_dir  = r'C:/Users/hojoo/Downloads/dataset2/frames'
+output_dir = r'dataset2_JPEG'
 os.makedirs(output_dir, exist_ok=True)
 
-quality_levels = [30, 50, 70, 90]   # 원하는 JPEG 품질
+quality_levels = [30]   # 원하는 JPEG 품질
 
 for path in glob(os.path.join(input_dir, '*.*')):
     img   = cv2.imread(path)
