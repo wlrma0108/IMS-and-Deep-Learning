@@ -10,15 +10,15 @@ import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 
 # --- 설정 ---
-IMAGE_DIR    = r'C:\Users\hojoo\Desktop\ims\dataset2_aug\dataset2_elastic'
-MASK_DIR     = r'C:\Users\hojoo\Desktop\ims\dataset2_aug\dataset2_elastic_masks'
+IMAGE_DIR    = r'C:\Users\hojoo\Downloads\dataset2\frames'
+MASK_DIR     = r'C:\Users\hojoo\Downloads\dataset2\masks'
 IMAGE_SIZE   = 256                                          
 NUM_SAMPLES  = 2700
 BATCH_SIZE   = 8
-EPOCHS       = 100
+EPOCHS       = 50
 LEARNING_RATE= 1e-3
 DEVICE       = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-RESULTS_DIR  = 'results'
+RESULTS_DIR  = 'results_origin'
 PLOTS_DIR    = os.path.join(RESULTS_DIR, 'plots')
 METRICS_FILE = os.path.join(RESULTS_DIR, 'metrics.txt')
 

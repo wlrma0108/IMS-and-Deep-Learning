@@ -9,12 +9,12 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 
-IMAGE_DIR = r'C:\Users\hojoo\Desktop\ims\dataset2_aug\dataset2_FlipRotate'
-MASK_DIR  = r'C:\Users\hojoo\Desktop\ims\dataset2_aug\dataset2_FlipRotate_masks'
+IMAGE_DIR = r'C:\Users\hojoo\Desktop\ims\dataset2_aug\dataset2_JPEG'
+MASK_DIR  = r'C:\Users\hojoo\Desktop\ims\dataset2_aug\dataset2_JPEG_masks'
 IMAGE_SIZE = 256
 NUM_SAMPLES = 2700
 BATCH_SIZE = 8
-EPOCHS = 50
+EPOCHS = 50 
 LEARNING_RATE = 1e-3
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(f"사용중인 장치 : {DEVICE}")
