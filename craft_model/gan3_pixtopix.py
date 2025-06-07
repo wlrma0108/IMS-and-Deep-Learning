@@ -107,13 +107,20 @@ class PatchDiscriminator(nn.Module):
 # ── 가중치 초기화 ─────────────────────────────────────────────────
 def init_weights(net):
     for m in net.modules():
-        if isinstance(m,(nn.Conv2d,nn.ConvTranspose2d)):
-            nn.init.kaiming_normal_(m.weight,0.2,'fan_in')
-            if m.bias is not None: nn.init.zeros_(m.bias)
-        elif isinstance(m,nn.InstanceNorm2d):
-            nn.init.ones_(m.weight); nn.init.zeros_(m.bias)
+        # Conv layers
+        if isinstance(m, (nn.Conv2d, nn.ConvTranspose2d)):
+            if hasattr(m, 'weight') and m.weight is not None:
+                nn.init.kaiming_normal_(m.weight, a=0.2, mode='fan_in')
+            if hasattr(m, 'bias') and m.bias is not None:
+                nn.init.zeros_(m.bias)
+        # InstanceNorm layers (affine=False may have no params)
+        elif isinstance(m, nn.InstanceNorm2d):
+            if hasattr(m, 'weight') and m.weight is not None:
+                nn.init.ones_(m.weight)
+            if hasattr(m, 'bias') and m.bias is not None:
+                nn.init.zeros_(m.bias)
 
-# ── 학습 함수 ─────────────────────────────────────────────────────
+# ── 학습 함수 ───────────────────────────────────────────────────── ─────────────────────────────────────────────────────
 def train():
     set_seed(SEED)
     os.makedirs(OUTPUT_DIR, exist_ok=True)
