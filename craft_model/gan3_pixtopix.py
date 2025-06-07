@@ -1,197 +1,177 @@
 import os, random, cv2, numpy as np
 from sklearn.model_selection import train_test_split
-
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
+from torchvision.utils import save_image
+from tqdm import tqdm
 
 # ── 설정 ───────────────────────────────────────────────────────────
 IMAGE_DIR   = r'C:\Users\hojoo\Downloads\dataset2\frames'
 MASK_DIR    = r'C:\Users\hojoo\Downloads\dataset2\masks'
 OUTPUT_DIR  = r'C:\Users\hojoo\Downloads\dataset2\gan_output1'
 IMG_SIZE    = 256
-BATCH_SIZE  = 8
-EPOCHS      = 100
+BATCH_SIZE  = 4
+EPOCHS      = 50
 LR          = 2e-4
 L1_LAMBDA   = 100
-NUM_SAMPLES = 2500
 DEVICE      = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-print(f"사용중인 장치 : {DEVICE}")
-os.makedirs(OUTPUT_DIR, exist_ok=True)
+SEED        = 42
 
-# ── Dataset ──
+# ── 시드 고정 ─────────────────────────────────────────────────────
+def set_seed(seed):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if DEVICE.type == 'cuda':
+        torch.cuda.manual_seed_all(seed)
+
+# ── 데이터셋 ─────────────────────────────────────────────────────
 class Pix2PixDataset(Dataset):
-    def __init__(self, image_dir, mask_dir, files, img_size):
-        self.image_dir, self.mask_dir = image_dir, mask_dir
-        self.files, self.img_size     = files, img_size
+    def __init__(self, img_dir, mask_dir):
+        # 공통 파일만
+        files = sorted(set(os.listdir(img_dir)) & set(os.listdir(mask_dir)))
+        if not files:
+            raise RuntimeError('No matching files in frames and masks directories')
+        self.files = files
+        self.img_dir = img_dir
+        self.mask_dir = mask_dir
 
-    def __len__(self): return len(self.files)
+    def __len__(self):
+        return len(self.files)
 
     def __getitem__(self, idx):
         fname = self.files[idx]
-        # load and preprocess image
-        img = cv2.imread(os.path.join(self.image_dir, fname))
-        img = cv2.resize(img, (self.img_size, self.img_size))
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
-        img = np.transpose(img, (2, 0, 1))
-        # load and preprocess mask/label
+        # RGB 이미지: [-1,1]
+        img = cv2.imread(os.path.join(self.img_dir, fname))
+        img = cv2.resize(img, (IMG_SIZE, IMG_SIZE))
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB).astype(np.float32)
+        img = img / 127.5 - 1.0
+        img = torch.from_numpy(img.transpose(2,0,1)).float()
+        # 마스크: [0,1]
         mask = cv2.imread(os.path.join(self.mask_dir, fname), cv2.IMREAD_GRAYSCALE)
-        mask = cv2.resize(mask, (self.img_size, self.img_size)).astype(np.float32) / 255.0
-        mask = np.expand_dims(mask, 0)
+        mask = cv2.resize(mask, (IMG_SIZE, IMG_SIZE)).astype(np.float32) / 255.0
+        mask = torch.from_numpy(mask).unsqueeze(0).float()
+        return mask, img
 
-        return torch.from_numpy(img), torch.from_numpy(mask)
-
-# ── Generator (U-Net) ──
-class ConvBlock(nn.Module):
-    def __init__(self, inc, outc):
-        super().__init__()
-        self.block = nn.Sequential(
-            nn.Conv2d(inc, outc, 3, 1, 1), nn.BatchNorm2d(outc), nn.ReLU(inplace=True),
-            nn.Conv2d(outc, outc, 3, 1, 1), nn.BatchNorm2d(outc), nn.ReLU(inplace=True)
-        )
-    def forward(self, x): return self.block(x)
-
+# ── Generator (U-Net) ───────────────────────────────────────────
 class UNetGenerator(nn.Module):
-    def __init__(self):
+    def __init__(self, in_c=1, out_c=3, feat=64):
         super().__init__()
-        self.enc1 = ConvBlock(3, 64);    self.pool1 = nn.MaxPool2d(2)
-        self.enc2 = ConvBlock(64, 128);  self.pool2 = nn.MaxPool2d(2)
-        self.enc3 = ConvBlock(128, 256); self.pool3 = nn.MaxPool2d(2)
-        self.enc4 = ConvBlock(256, 512); self.pool4 = nn.MaxPool2d(2)
-        self.bridge = ConvBlock(512, 1024)
-
-        self.up1 = nn.ConvTranspose2d(1024, 512, 2, 2); self.dec1 = ConvBlock(1024, 512)
-        self.up2 = nn.ConvTranspose2d(512, 256, 2, 2);  self.dec2 = ConvBlock(512, 256)
-        self.up3 = nn.ConvTranspose2d(256, 128, 2, 2);  self.dec3 = ConvBlock(256, 128)
-        self.up4 = nn.ConvTranspose2d(128, 64, 2, 2);   self.dec4 = ConvBlock(128, 64)
-
-        self.final = nn.Conv2d(64, 1, 1)
+        # Encoder
+        self.enc1 = nn.Sequential(nn.Conv2d(in_c, feat, 4,2,1, bias=False), nn.LeakyReLU(0.2,True))
+        self.enc2 = nn.Sequential(nn.Conv2d(feat, feat*2,4,2,1,bias=False), nn.InstanceNorm2d(feat*2), nn.LeakyReLU(0.2,True))
+        self.enc3 = nn.Sequential(nn.Conv2d(feat*2, feat*4,4,2,1,bias=False), nn.InstanceNorm2d(feat*4), nn.LeakyReLU(0.2,True))
+        self.enc4 = nn.Sequential(nn.Conv2d(feat*4, feat*8,4,2,1,bias=False), nn.InstanceNorm2d(feat*8), nn.LeakyReLU(0.2,True))
+        self.bottleneck = nn.Sequential(nn.Conv2d(feat*8, feat*8,4,2,1,bias=False), nn.ReLU(True))
+        # Decoder
+        self.dec4 = nn.Sequential(nn.ConvTranspose2d(feat*8, feat*8,4,2,1,bias=False), nn.InstanceNorm2d(feat*8), nn.ReLU(True), nn.Dropout(0.5))
+        self.dec3 = nn.Sequential(nn.ConvTranspose2d(feat*16, feat*4,4,2,1,bias=False), nn.InstanceNorm2d(feat*4), nn.ReLU(True), nn.Dropout(0.5))
+        self.dec2 = nn.Sequential(nn.ConvTranspose2d(feat*8, feat*2,4,2,1,bias=False), nn.InstanceNorm2d(feat*2), nn.ReLU(True))
+        self.dec1 = nn.Sequential(nn.ConvTranspose2d(feat*4, feat,4,2,1,bias=False), nn.InstanceNorm2d(feat), nn.ReLU(True))
+        self.out  = nn.Sequential(nn.ConvTranspose2d(feat*2, out_c,4,2,1), nn.Tanh())
 
     def forward(self, x):
-        s1 = self.enc1(x); p1 = self.pool1(s1)
-        s2 = self.enc2(p1); p2 = self.pool2(s2)
-        s3 = self.enc3(p2); p3 = self.pool3(s3)
-        s4 = self.enc4(p3); p4 = self.pool4(s4)
+        e1 = self.enc1(x)
+        e2 = self.enc2(e1)
+        e3 = self.enc3(e2)
+        e4 = self.enc4(e3)
+        b  = self.bottleneck(e4)
+        d4 = self.dec4(b)
+        d4 = torch.cat([d4, e4],1)
+        d3 = self.dec3(d4)
+        d3 = torch.cat([d3, e3],1)
+        d2 = self.dec2(d3)
+        d2 = torch.cat([d2, e2],1)
+        d1 = self.dec1(d2)
+        d1 = torch.cat([d1, e1],1)
+        return self.out(d1)
 
-        b = self.bridge(p4)
-        d1 = self.dec1(torch.cat([self.up1(b), s4], 1))
-        d2 = self.dec2(torch.cat([self.up2(d1), s3], 1))
-        d3 = self.dec3(torch.cat([self.up3(d2), s2], 1))
-        d4 = self.dec4(torch.cat([self.up4(d3), s1], 1))
-
-        return torch.sigmoid(self.final(d4))
-
-# ── Discriminator (PatchGAN) ──
+# ── Discriminator (70×70 PatchGAN) ─────────────────────────────
 class PatchDiscriminator(nn.Module):
-    def __init__(self, in_c=4):
+    def __init__(self, in_c=4, feat=64):
         super().__init__()
-        def block(ic, oc, stride):
-            return nn.Sequential(
-                nn.Conv2d(ic, oc, 4, stride, 1),
-                nn.BatchNorm2d(oc),
-                nn.LeakyReLU(0.2, True)
-            )
+        layers = []
+        dims = [feat, feat*2, feat*4, feat*8]
+        for i, d in enumerate(dims):
+            inc = in_c if i==0 else dims[i-1]
+            stride = 1 if i==3 else 2
+            layers.append(nn.Conv2d(inc, d,4,stride,1,bias=False))
+            if i>0: layers.append(nn.InstanceNorm2d(d))
+            layers.append(nn.LeakyReLU(0.2,True))
+        layers.append(nn.Conv2d(dims[-1],1,4,1,1,bias=False))
+        self.model = nn.Sequential(*layers)
+    def forward(self, m, i): return self.model(torch.cat([m,i],1))
 
-        self.net = nn.Sequential(
-            block(in_c, 64, 2),
-            block(64, 128, 2),
-            block(128, 256, 2),
-            block(256, 512, 1),
-            nn.Conv2d(512, 1, 4, 1, 1)
-        )
+# ── 가중치 초기화 ─────────────────────────────────────────────────
+def init_weights(net):
+    for m in net.modules():
+        if isinstance(m,(nn.Conv2d,nn.ConvTranspose2d)):
+            nn.init.kaiming_normal_(m.weight,0.2,'fan_in')
+            if m.bias is not None: nn.init.zeros_(m.bias)
+        elif isinstance(m,nn.InstanceNorm2d):
+            nn.init.ones_(m.weight); nn.init.zeros_(m.bias)
 
-    def forward(self, img, mask):
-        x = torch.cat([img, mask], 1)
-        return self.net(x)
-
-# ── 학습 함수 ──
+# ── 학습 함수 ─────────────────────────────────────────────────────
 def train():
-    # 파일 로딩 및 분할
-    files = random.sample(os.listdir(IMAGE_DIR), min(NUM_SAMPLES, len(os.listdir(IMAGE_DIR))))
-    train_files, val_files = train_test_split(files, test_size=0.2, random_state=42)
+    set_seed(SEED)
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    # DataLoader
+    dataset = Pix2PixDataset(IMAGE_DIR, MASK_DIR)
+    train_size = int(0.8*len(dataset)); val_size = len(dataset)-train_size
+    train_ds, val_ds = torch.utils.data.random_split(dataset,[train_size,val_size])
+    train_loader = DataLoader(train_ds, batch_size=BATCH_SIZE, shuffle=True, num_workers=0, pin_memory=True)
+    val_loader   = DataLoader(val_ds,   batch_size=BATCH_SIZE, shuffle=False,num_workers=0, pin_memory=True)
+    # Models, Loss, Optimizer
+    G = UNetGenerator().to(DEVICE); D = PatchDiscriminator().to(DEVICE)
+    init_weights(G); init_weights(D)
+    adv_loss = nn.BCEWithLogitsLoss(); l1_loss = nn.L1Loss()
+    opt_G = optim.Adam(G.parameters(), lr=LR, betas=(0.5,0.999))
+    opt_D = optim.Adam(D.parameters(), lr=LR, betas=(0.5,0.999))
+    scaler = torch.cuda.amp.GradScaler(enabled=DEVICE.type=='cuda')
 
-    train_loader = DataLoader(
-        Pix2PixDataset(IMAGE_DIR, MASK_DIR, train_files, IMG_SIZE),
-        batch_size=BATCH_SIZE, shuffle=True, num_workers=4, pin_memory=True
-    )
-    val_loader = DataLoader(
-        Pix2PixDataset(IMAGE_DIR, MASK_DIR, val_files, IMG_SIZE),
-        batch_size=BATCH_SIZE, shuffle=False, num_workers=2, pin_memory=True
-    )
-
-    # 모델, 손실, 최적화
-    G = UNetGenerator().to(DEVICE)
-    D = PatchDiscriminator().to(DEVICE)
-
-    criterion_GAN = nn.BCEWithLogitsLoss()
-    criterion_L1  = nn.L1Loss()
-
-    opt_G = optim.Adam(G.parameters(), lr=LR, betas=(0.5, 0.999))
-    opt_D = optim.Adam(D.parameters(), lr=LR, betas=(0.5, 0.999))
-
-    # 학습 루프
     for epoch in range(1, EPOCHS+1):
         G.train(); D.train()
-        for imgs, masks in train_loader:
-            imgs, masks = imgs.to(DEVICE), masks.to(DEVICE)
+        pbar = tqdm(train_loader, desc=f'Epoch {epoch}/{EPOCHS}')
+        for mask, img in pbar:
+            mask, img = mask.to(DEVICE), img.to(DEVICE)
+            valid = torch.ones(mask.size(0),1,30,30, device=DEVICE)
+            fake  = torch.zeros_like(valid)
+            # Discriminator step
+            with torch.cuda.amp.autocast(enabled=DEVICE.type=='cuda'):
+                gen_img = G(mask).detach()
+                d_real = adv_loss(D(mask,img), valid)
+                d_fake = adv_loss(D(mask,gen_img), fake)
+                d_loss = 0.5*(d_real + d_fake)
+            opt_D.zero_grad(); scaler.scale(d_loss).backward(); scaler.step(opt_D)
 
-            # -------------------------
-            #  1) Discriminator 업데이트
-            # -------------------------
-            opt_D.zero_grad()
-            # real
-            real_pred = D(imgs, masks)
-            real_gt   = torch.ones_like(real_pred)
-            loss_D_real = criterion_GAN(real_pred, real_gt)
+            # Generator step
+            with torch.cuda.amp.autocast(enabled=DEVICE.type=='cuda'):
+                gen_img = G(mask)
+                g_adv = adv_loss(D(mask,gen_img), valid)
+                g_l1 = l1_loss(gen_img, img)*L1_LAMBDA
+                g_loss = g_adv + g_l1
+            opt_G.zero_grad(); scaler.scale(g_loss).backward(); scaler.step(opt_G); scaler.update()
+            pbar.set_postfix(D=f'{d_loss.item():.4f}', G=f'{g_loss.item():.4f}')
 
-            # fake
-            fake_masks = G(imgs)
-            fake_pred  = D(imgs, fake_masks.detach())
-            fake_gt    = torch.zeros_like(fake_pred)
-            loss_D_fake = criterion_GAN(fake_pred, fake_gt)
-
-            loss_D = (loss_D_real + loss_D_fake) * 0.5
-            loss_D.backward()
-            opt_D.step()
-
-            # ------------------------
-            #  2) Generator 업데이트
-            # ------------------------
-            opt_G.zero_grad()
-            fake_pred = D(imgs, fake_masks)
-            # GAN loss + L1 loss
-            loss_G_GAN = criterion_GAN(fake_pred, real_gt)
-            loss_G_L1  = criterion_L1(fake_masks, masks) * L1_LAMBDA
-            loss_G = loss_G_GAN + loss_G_L1
-            loss_G.backward()
-            opt_G.step()
-
-        # 검증 L1 계산
-        G.eval()
-        val_l1 = 0
+        # Save sample
+        save_image(mask[0], os.path.join(OUTPUT_DIR,f'mask_{epoch:03d}.png'), normalize=True)
+        save_image((gen_img[0]+1)/2, os.path.join(OUTPUT_DIR,f'gen_{epoch:03d}.png'), normalize=True)
+        # Validation L1
+        G.eval(); val_l1=0
         with torch.no_grad():
-            for imgs, masks in val_loader:
-                imgs, masks = imgs.to(DEVICE), masks.to(DEVICE)
-                preds = G(imgs)
-                val_l1 += criterion_L1(preds, masks).item() * imgs.size(0)
-        val_l1 = val_l1 / len(val_loader.dataset)
+            for mask, img in val_loader:
+                mask, img = mask.to(DEVICE), img.to(DEVICE)
+                pred = G(mask)
+                val_l1 += l1_loss(pred, img).item()*mask.size(0)
+        val_l1 /= len(val_loader.dataset)
+        print(f'Val L1: {val_l1:.4f}')
 
-        print(f"Epoch [{epoch}/{EPOCHS}]  loss_D: {loss_D.item():.4f}  "
-              f"loss_G: {loss_G.item():.4f}  val_L1: {val_l1:.4f}")
+    torch.save(G.state_dict(), os.path.join(OUTPUT_DIR,'G.pth'))
+    torch.save(D.state_dict(), os.path.join(OUTPUT_DIR,'D.pth'))
 
-        # 샘플 시각화 저장
-        if epoch % 10 == 0:
-            sample_img = imgs[0].permute(1,2,0).cpu().numpy() * 255
-            sample_mask = preds[0,0].cpu().numpy() * 255
-            overlay = sample_img.copy()
-            overlay[sample_mask>127] = [255, 0, 0]
-            cv2.imwrite(os.path.join(OUTPUT_DIR, f"overlay_epoch{epoch}.png"), overlay)
-
-    # 모델 저장
-    torch.save(G.state_dict(), os.path.join(OUTPUT_DIR, 'generator.pth'))
-    torch.save(D.state_dict(), os.path.join(OUTPUT_DIR, 'discriminator.pth'))
-    print("Training complete. Models saved.")
-
+# ── 엔트리 포인트 ─────────────────────────────────────────────
 if __name__ == '__main__':
+    set_seed(SEED)
     train()
