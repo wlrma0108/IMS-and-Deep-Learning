@@ -10,15 +10,15 @@ import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 
 # --- 설정 ---
-IMAGE_DIR    = r'C:\Users\hojoo\Downloads\dataset2\frames'
-MASK_DIR     = r'C:\Users\hojoo\Downloads\dataset2\masks'
+IMAGE_DIR    = r'C:\Users\hojoo\Desktop\ims\dataset2\gan_frame'
+MASK_DIR     = r'C:\Users\hojoo\Desktop\ims\dataset2\gan_mask'
 IMAGE_SIZE   = 256                                          
 NUM_SAMPLES  = 2700
 BATCH_SIZE   = 8
 EPOCHS       = 50
 LEARNING_RATE= 1e-3
 DEVICE       = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-RESULTS_DIR  = 'results_origin'
+RESULTS_DIR  = 'results_gan'
 PLOTS_DIR    = os.path.join(RESULTS_DIR, 'plots')
 METRICS_FILE = os.path.join(RESULTS_DIR, 'metrics.txt')
 
@@ -29,24 +29,48 @@ os.makedirs(PLOTS_DIR, exist_ok=True)
 
 # --- Dataset 클래스 ---
 class CovidDataset(Dataset):
-    def __init__(self, image_dir, mask_dir, samples):
-        self.files = samples
+    def __init__(self, image_dir, mask_dir, samples=None):
+        # 이미지 파일 리스트
+        all_imgs = sorted(os.listdir(image_dir))
+        # 만약 특정 샘플 목록을 받았다면, 그 중 실제 존재하는 것만 필터링
+        if samples is None:
+            self.files = [f for f in all_imgs]
+        else:
+            self.files = [f for f in samples if f in all_imgs]
+
+        if not self.files:
+            raise RuntimeError(f"No image files found in {image_dir}")
+
         self.image_dir = image_dir
-        self.mask_dir = mask_dir
+        self.mask_dir  = mask_dir
 
     def __len__(self):
         return len(self.files)
 
     def __getitem__(self, idx):
-        fname = self.files[idx]
-        img = cv2.imread(os.path.join(self.image_dir, fname), cv2.IMREAD_COLOR)
-        img = cv2.resize(img, (IMAGE_SIZE, IMAGE_SIZE))
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
-        img = np.transpose(img, (2, 0, 1))  # (3,H,W)
+        fname = self.files[idx]  # e.g. "frame_0853.png"
+        img_path = os.path.join(self.image_dir, fname)
+        # frame_0853.png → mask_0853.png
+        mask_fname = fname.replace('frame_', 'mask_')
+        mask_path  = os.path.join(self.mask_dir, mask_fname)
 
-        mask = cv2.imread(os.path.join(self.mask_dir, fname), cv2.IMREAD_GRAYSCALE)
-        mask = cv2.resize(mask, (IMAGE_SIZE, IMAGE_SIZE)).astype(np.float32) / 255.0
-        mask = np.expand_dims(mask, axis=0)  # (1,H,W)
+        # --- 이미지 읽기 & 체크 ---
+        img = cv2.imread(img_path, cv2.IMREAD_COLOR)
+        if img is None:
+            raise FileNotFoundError(f"Cannot read image: {img_path}")
+
+        mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
+        if mask is None:
+            raise FileNotFoundError(f"Cannot read mask:  {mask_path}")
+
+        # --- 리사이즈 & 전처리 ---
+        img  = cv2.resize(img,  (IMAGE_SIZE, IMAGE_SIZE))
+        img  = cv2.cvtColor(img, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
+        img  = np.transpose(img, (2, 0, 1))
+
+        mask = cv2.resize(mask, (IMAGE_SIZE, IMAGE_SIZE), interpolation=cv2.INTER_NEAREST)
+        mask = mask.astype(np.float32) / 255.0
+        mask = np.expand_dims(mask, axis=0)
 
         return torch.tensor(img), torch.tensor(mask)
 
