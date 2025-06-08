@@ -59,28 +59,53 @@ class Up(nn.Module):
     def forward(self,x): return self.block(x)
 
 class DAGANGenerator(nn.Module):
-    """U‑Net + AdaIN(noise) : 이미지·마스크 동시 생성"""
+    """U‑Net + AdaIN noise (skip **addition**) — 이미지·마스크 동시 생성"""
     def __init__(self, img_c=3, mask_c=1, noise_dim=100, feat=64):
-        super().__init__(); self.noise_dim=noise_dim
-        # Encoder
-        self.d1=Down(img_c+mask_c,feat); self.d2=Down(feat,feat*2); self.d3=Down(feat*2,feat*4); self.d4=Down(feat*4,feat*8)
-        self.bottleneck = nn.Sequential(nn.Conv2d(feat*8,feat*8,4,2,1,bias=False), nn.BatchNorm2d(feat*8), nn.ReLU(True))
-        # AdaIN affine
-        self.fc_scale = nn.Linear(noise_dim, feat*8); self.fc_shift = nn.Linear(noise_dim, feat*8)
-        # Decoder
-        self.u4=Up(feat*16,feat*4); self.u3=Up(feat*8,feat*2); self.u2=Up(feat*4,feat); self.u1=Up(feat*2,feat)
-        self.to_img = nn.Sequential(nn.Conv2d(feat, img_c,3,1,1), nn.Tanh())
-        self.to_mask= nn.Sequential(nn.Conv2d(feat, mask_c,3,1,1), nn.Sigmoid())
-    def forward(self,img,mask,z):
-        x=torch.cat([img,mask],1)
-        e1=self.d1(x); e2=self.d2(e1); e3=self.d3(e2); e4=self.d4(e3)
-        b=self.bottleneck(e4)
-        scale=self.fc_scale(z).view(-1,b.size(1),1,1); shift=self.fc_shift(z).view(-1,b.size(1),1,1)
-        b = b*(scale+1)+shift
-        d4=self.u4(torch.cat([b,e4],1)); d3=self.u3(torch.cat([d4,e3],1)); d2=self.u2(torch.cat([d3,e2],1)); d1=self.u1(torch.cat([d2,e1],1))
-        return self.to_img(d1), self.to_mask(d1)
+        super().__init__(); self.noise_dim = noise_dim
+        # Encoder (Down: 256→128→64→32→16)
+        self.d1 = Down(img_c + mask_c, feat)        # 128, C=64
+        self.d2 = Down(feat, feat * 2)              # 64 , C=128
+        self.d3 = Down(feat * 2, feat * 4)          # 32 , C=256
+        self.d4 = Down(feat * 4, feat * 8)          # 16 , C=512
+        # Bottleneck 16→8, C=512
+        self.bottleneck = nn.Sequential(
+            nn.Conv2d(feat * 8, feat * 8, 4, 2, 1, bias=False),
+            nn.BatchNorm2d(feat * 8),
+            nn.ReLU(True))
+        # AdaIN affine layers (noise→scale/shift)
+        self.fc_scale = nn.Linear(noise_dim, feat * 8)
+        self.fc_shift = nn.Linear(noise_dim, feat * 8)
+        # Decoder with **addition** skip connections (keeps channel sizes matched)
+        self.u4 = Up(feat * 8, feat * 8)            # 8→16  , C=512
+        self.u3 = Up(feat * 8, feat * 4)            # 16→32 , C=256
+        self.u2 = Up(feat * 4, feat * 2)            # 32→64 , C=128
+        self.u1 = Up(feat * 2, feat)                # 64→128, C=64
+        # Final heads (upsample 128→256 implicit in u1 → to_* conv stride 1)
+        self.to_img  = nn.Sequential(nn.ConvTranspose2d(feat, img_c, 4, 2, 1), nn.Tanh())
+        self.to_mask = nn.Sequential(nn.ConvTranspose2d(feat, mask_c,4, 2, 1), nn.Sigmoid())
 
-# ───────────────── Discriminator ─────────────────────
+    def forward(self, img, mask, z):
+        # Encoder
+        x = torch.cat([img, mask], 1)
+        e1 = self.d1(x)
+        e2 = self.d2(e1)
+        e3 = self.d3(e2)
+        e4 = self.d4(e3)
+        # Bottleneck + AdaIN noise (8×8)
+        b = self.bottleneck(e4)
+        s = self.fc_scale(z).view(-1, b.size(1), 1, 1)
+        sh= self.fc_shift(z).view(-1, b.size(1), 1, 1)
+        b = b * (s + 1) + sh
+        # Decoder with skip **addition** (shapes match)
+        d4 = self.u4(b)      + e4  # 16×16, C=512
+        d3 = self.u3(d4)     + e3  # 32×32, C=256
+        d2 = self.u2(d3)     + e2  # 64×64, C=128
+        d1 = self.u1(d2)     + e1  # 128×128, C=64
+        # Output 256×256
+        img_out  = self.to_img(d1)
+        mask_out = self.to_mask(d1)
+        return img_out, mask_out
+
 class DAGANDiscriminator(nn.Module):
     def __init__(self,in_c=4,feat=64):
         super().__init__(); layers=[]; dims=[feat,feat*2,feat*4,feat*8]
@@ -94,33 +119,71 @@ class DAGANDiscriminator(nn.Module):
 # ───────────────── 학습 루프 ─────────────────────────
 
 def train():
-    set_seed(SEED); os.makedirs(OUTPUT_DIR,exist_ok=True)
-    loader=DataLoader(ImageMaskDataset(IMAGE_DIR,MASK_DIR),batch_size=BATCH_SIZE,shuffle=True,num_workers=0,pin_memory=True)
-    G,D=DAGANGenerator().to(DEVICE),DAGANDiscriminator().to(DEVICE)
-    opt_G=optim.Adam(G.parameters(),lr=LR,betas=(0,0.99)); opt_D=optim.Adam(D.parameters(),lr=LR,betas=(0,0.99))
-    criterion=nn.BCEWithLogitsLoss()
+    set_seed(SEED)
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    loader = DataLoader(
+        ImageMaskDataset(IMAGE_DIR, MASK_DIR),
+        batch_size=BATCH_SIZE,
+        shuffle=True,
+        num_workers=0,
+        pin_memory=True,
+    )
 
-    for epoch in range(1,EPOCHS+1):
-        loop=tqdm(loader,desc=f'Epoch {epoch}/{EPOCHS}')
-        for img,mask in loop:
-            img,mask=img.to(DEVICE),mask.to(DEVICE); bs=img.size(0); z=torch.randn(bs,NOISE_DIM,device=DEVICE)
-            fake_img,fake_mask=G(img,mask,z)
-            fake_pair=torch.cat([fake_img,fake_mask],1); real_pair=torch.cat([img,mask],1)
-            # Discriminator
-            d_loss=0.5*(criterion(D(real_pair),torch.ones(bs,1,device=DEVICE))+criterion(D(fake_pair.detach()),torch.zeros(bs,1,device=DEVICE)))
+    # 모델 및 옵티마이저
+    G = DAGANGenerator().to(DEVICE)
+    D = DAGANDiscriminator().to(DEVICE)
+    opt_G = optim.Adam(G.parameters(), lr=LR, betas=(0.0, 0.99))
+    opt_D = optim.Adam(D.parameters(), lr=LR, betas=(0.0, 0.99))
+    criterion = nn.BCEWithLogitsLoss()
+
+    for epoch in range(1, EPOCHS + 1):
+        loop = tqdm(loader, desc=f"Epoch {epoch}/{EPOCHS}")
+        for img, mask in loop:
+            img, mask = img.to(DEVICE), mask.to(DEVICE)
+            bs = img.size(0)
+            z = torch.randn(bs, NOISE_DIM, device=DEVICE)
+
+            # ── Forward ──
+            fake_img, fake_mask = G(img, mask, z)
+            fake_pair = torch.cat([fake_img, fake_mask], 1)
+            real_pair = torch.cat([img, mask], 1)
+
+            # ── Discriminator update ──
+            real_logits = D(real_pair)
+            fake_logits = D(fake_pair.detach())
+            d_loss = 0.5 * (
+                criterion(real_logits, torch.ones_like(real_logits)) +
+                criterion(fake_logits, torch.zeros_like(fake_logits))
+            )
             opt_D.zero_grad(); d_loss.backward(); opt_D.step()
-            # Generator
-            g_loss=criterion(D(fake_pair),torch.ones(bs,1,device=DEVICE))
-            opt_G.zero_grad(); g_loss.backward(); opt_G.step()
-            loop.set_postfix(D=f"{d_loss.item():.4f}",G=f"{g_loss.item():.4f}")
-        # 샘플 저장
-        with torch.no_grad():
-            z=torch.randn(4,NOISE_DIM,device=DEVICE); img_s,mask_s=next(iter(loader)); img_s,mask_s=img_s[:4].to(DEVICE),mask_s[:4].to(DEVICE)
-            gen_img,gen_mask=G(img_s,mask_s,z)
-            save_image((gen_img+1)/2,os.path.join(OUTPUT_DIR,f'ep{epoch:03d}_img.png'))
-            cv2.imwrite(os.path.join(OUTPUT_DIR,f'ep{epoch:03d}_mask.png'),(gen_mask.squeeze(1).cpu().numpy()*255).astype(np.uint8))
-    torch.save(G.state_dict(),os.path.join(OUTPUT_DIR,'G.pth'))
-    torch.save(D.state_dict(),os.path.join(OUTPUT_DIR,'D.pth'))
 
-if __name__=='__main__':
+            # ── Generator update ──
+            fake_logits = D(fake_pair)
+            g_loss = criterion(fake_logits, torch.ones_like(fake_logits))
+            opt_G.zero_grad(); g_loss.backward(); opt_G.step()
+
+            loop.set_postfix(D=f"{d_loss.item():.4f}", G=f"{g_loss.item():.4f}")
+
+        # ── 샘플 저장 ──
+        with torch.no_grad():
+            z = torch.randn(4, NOISE_DIM, device=DEVICE)
+            img_s, mask_s = next(iter(loader))
+            img_s, mask_s = img_s[:4].to(DEVICE), mask_s[:4].to(DEVICE)
+            gen_img, gen_mask = G(img_s, mask_s, z)
+
+            save_image((gen_img + 1) / 2, os.path.join(OUTPUT_DIR, f'ep{epoch:03d}_img.png'))
+            # 개별 마스크 저장
+            for idx in range(gen_mask.size(0)):
+                cv2.imwrite(
+                    os.path.join(OUTPUT_DIR, f'ep{epoch:03d}_mask_{idx}.png'),
+                    (gen_mask[idx, 0].cpu().numpy() * 255).astype(np.uint8)
+                )
+
+    # ── 모델 저장 ──
+    torch.save(G.state_dict(), os.path.join(OUTPUT_DIR, 'G.pth'))
+    torch.save(D.state_dict(), os.path.join(OUTPUT_DIR, 'D.pth'))
+
+
+# ───────────────── 엔트리 포인트 ─────────────────────
+if __name__ == '__main__':
     train()
