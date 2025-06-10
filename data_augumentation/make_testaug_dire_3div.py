@@ -14,15 +14,15 @@ os.makedirs(out_dir, exist_ok=True)
 # 파일 확장자에 맞게 패턴 수정 (예: '*.png' 또는 '*.*')
 pattern = '*.*'
 
-# 1. 첫 번째 디렉토리에서 앞에서 1250장 (0–1249)
+# 1. 첫 번째 디렉토리에서 앞에서 834장 (0–833)
 files1 = sorted(glob(os.path.join(dir1, pattern)))
 selected1 = files1[:834]
 
-# 2. 두 번째 디렉토리에서 1250장부터 2500장 전까지 (1250–2499)
+# 2. 두 번째 디렉토리에서 834장부터 1667장 전까지 (834–1667)
 files2 = sorted(glob(os.path.join(dir2, pattern)))
 selected2 = files2[834:1667]
 
-# 3. 세 번째 디렉토리에서 1250장부터 2500장 전까지 (1250–2499)
+# 3. 세 번째 디렉토리에서 1667장부터 2500장 전까지 (1667–2499)
 files3 = sorted(glob(os.path.join(dir3, pattern)))
 selected3 = files3[1667:2500]
 
