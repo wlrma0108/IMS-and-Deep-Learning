@@ -1,0 +1,4 @@
+=== Test Results ===
+Test Loss : 0.0141
+Test F1   : 0.7803
+Test mIoU : 0.6888
