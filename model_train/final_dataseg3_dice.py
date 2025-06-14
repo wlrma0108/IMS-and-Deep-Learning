@@ -10,8 +10,8 @@ import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 
 # --- 설정 ---
-IMAGE_DIR    = r'C:\Users\hojoo\Desktop\ims\dataset2\gan_frame'
-MASK_DIR     = r'C:\Users\hojoo\Desktop\ims\dataset2\gan_mask'
+IMAGE_DIR    = r'C:\Users\hojoo\Desktop\ims\dataset2\frames'
+MASK_DIR     = r'C:\Users\hojoo\Desktop\ims\dataset2\masks'
 IMAGE_SIZE   = 256                                          
 NUM_SAMPLES  = 2700
 BATCH_SIZE   = 8
@@ -228,7 +228,7 @@ if __name__ == '__main__':
 
     # 모델/옵티마이저/손실함수
     model     = UNet().to(DEVICE)
-    criterion = nn.BCELoss()  
+    criterion = DiceLoss() 
     optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE)
 
     # 학습 루프

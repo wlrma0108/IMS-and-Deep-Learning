@@ -2,8 +2,8 @@ import os
 from glob import glob
 import cv2
 
-input_dir  = r'C:/Users/hojoo/Downloads/dataset2/frames'
-output_dir = r'dataset2_JPEG'
+input_dir  = r'C:\Users\hojoo\Desktop\ims\lena'
+output_dir = r'lena'
 os.makedirs(output_dir, exist_ok=True)
 
 quality_levels = [30]   # 원하는 JPEG 품질

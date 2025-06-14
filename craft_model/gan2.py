@@ -15,7 +15,7 @@ BATCH_SIZE  = 8
 EPOCHS      = 50
 LR          = 2e-4
 L1_LAMBDA   = 100
-NUM_SAMPLES = 2000
+NUM_SAMPLES = 2500
 DEVICE      = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(f"사용중인 장치 : {DEVICE}")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
