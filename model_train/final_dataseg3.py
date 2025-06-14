@@ -228,7 +228,7 @@ if __name__ == '__main__':
 
     # 모델/옵티마이저/손실함수
     model     = UNet().to(DEVICE)
-    criterion = DiceLoss() 
+    criterion = nn.BCELoss()  
     optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE)
 
     # 학습 루프
