@@ -145,7 +145,23 @@ def calculate_metrics(preds, masks, threshold=0.5):
     f1_mean   = f1.mean().item()
 
     return f1_mean, miou
+class DiceLoss(nn.Module):
+    def __init__(self, smooth=1e-6):
+        super().__init__()
+        self.smooth = smooth
 
+    def forward(self, preds, targets):
+        # preds, targets: (B, 1, H, W), 이미 0~1 사이값
+        preds = preds.contiguous().view(preds.shape[0], -1)
+        targets = targets.contiguous().view(targets.shape[0], -1)
+
+        intersection = (preds * targets).sum(dim=1)
+        union = preds.sum(dim=1) + targets.sum(dim=1)
+
+        dice = (2. * intersection + self.smooth) / (union + self.smooth)
+        loss = 1 - dice
+        return loss.mean()
+    
 # --- Train & Eval ---
 def train_model(model, loader, criterion, optimizer):
     model.train()
@@ -212,7 +228,7 @@ if __name__ == '__main__':
 
     # 모델/옵티마이저/손실함수
     model     = UNet().to(DEVICE)
-    criterion = nn.BCELoss()
+    criterion = DiceLoss() 
     optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE)
 
     # 학습 루프
