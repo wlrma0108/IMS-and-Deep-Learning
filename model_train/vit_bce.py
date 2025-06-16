@@ -1,6 +1,4 @@
-"""SegFormer‑B0 Semantic Segmentation (BCE‑only Loss)
-기존 파이프라인에서 DiceLoss를 제거하고 **BCEWithLogitsLoss 하나만** 사용합니다.
-"""
+
 import os, random, cv2, numpy as np, matplotlib.pyplot as plt, torch
 import torch.nn as nn
 import torch.optim as optim
